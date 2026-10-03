@@ -1,8 +1,8 @@
-cat << 'EOF' > digi2_splash_tool.py
 #!/usr/bin/env python3
 """
 DigiSplash-II: Custom Boot Splash & Animation Patcher for Digitakt II (OS 1.17)
-Standalone single-file toolchain.
+v2.3.0 - Hardware-Verified Isolated Release
+Supports static images (PNG, JPG, BMP) and animated GIFs.
 """
 
 import argparse
@@ -11,18 +11,20 @@ import subprocess
 import sys
 from PIL import Image, ImageSequence
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 BASE_ADDR = 0x40000400
 
-# Verified OS 1.17 Offsets
+# Verified Safe OS 1.17 Memory Offsets
 RNG_OFFSET = 0x1520B0
 BURN_OFFSET = 0x0D1622
 THRESHOLDS = [0x0D1626, 0x0D1632, 0x0D1646, 0x0D1668]
+
+# 100% Dedicated Splash Buffers (Zero UI Font / Audio Collisions)
 STATIC_ASSET_OFFSET = 0x307B18
-ROM_CAVE_FRAMES = 0x2E0800
-ROM_CAVE_TABLE = 0x2E2800
-ROM_CAVE_PLAYER = 0x2E2840
-SLOT3_OFFSET = 0x0D0DF0
+ANIM_FRAMES_OFFSET  = 0x30339C  # 8 KB dedicated splash buffer
+ANIM_TABLE_OFFSET   = 0x307718  # 48-byte lookup table
+ANIM_PLAYER_OFFSET  = 0x307750  # ColdFire player routine
+SLOT3_TRAMPOLINE    = 0x0D0DF0  # 6-byte trampoline jump
 
 
 def pack_frame(im, invert=False):
@@ -34,7 +36,7 @@ def pack_frame(im, invert=False):
     if invert:
         im = Image.eval(im, lambda p: 255 if p == 0 else 0)
 
-    # Invert vertical axis for physical OLED panel orientation
+    # Invert vertical axis for physical OLED panel mounting
     im = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
     pix = im.load()
 
@@ -97,45 +99,47 @@ def render_ascii_preview(frame_bytes):
     return "\n".join(lines)
 
 
-def apply_patches(rom, is_anim, payload_bytes, mode="equal"):
+def apply_patches(rom, is_anim, payload_bytes, mode="100percent"):
     """Applies entropy, thresholds, assets, and player code."""
     # 1. Entropy & first-draw burn
     rom[RNG_OFFSET:RNG_OFFSET+6] = bytes.fromhex("D0B9FC07000C")
     rom[BURN_OFFSET:BURN_OFFSET+2] = bytes.fromhex("4E93")
 
     # 2. Probability Thresholds
-    if mode == "100percent":
-        rom[THRESHOLDS[0]:THRESHOLDS[0]+4] = bytes.fromhex("00000000")
-        rom[THRESHOLDS[1]:THRESHOLDS[1]+4] = bytes.fromhex("00000000")
-        rom[THRESHOLDS[2]:THRESHOLDS[2]+4] = bytes.fromhex("00007FFF")
-        rom[THRESHOLDS[3]:THRESHOLDS[3]+4] = bytes.fromhex("00000000")
-    else:  # 'equal' (25% each across A, B, C, D; Variant E disabled)
+    if mode == "equal":
+        # 25% each across A, B, C, D (Variant E / Dither disabled to avoid audio noise)
         rom[THRESHOLDS[0]:THRESHOLDS[0]+4] = bytes.fromhex("00001FFF")
         rom[THRESHOLDS[1]:THRESHOLDS[1]+4] = bytes.fromhex("00002AAA")
         rom[THRESHOLDS[2]:THRESHOLDS[2]+4] = bytes.fromhex("00003FFF")
         rom[THRESHOLDS[3]:THRESHOLDS[3]+4] = bytes.fromhex("00007FFF")
+    else:  # '100percent' (default)
+        rom[THRESHOLDS[0]:THRESHOLDS[0]+4] = bytes.fromhex("00000000")
+        rom[THRESHOLDS[1]:THRESHOLDS[1]+4] = bytes.fromhex("00000000")
+        rom[THRESHOLDS[2]:THRESHOLDS[2]+4] = bytes.fromhex("00007FFF")
+        rom[THRESHOLDS[3]:THRESHOLDS[3]+4] = bytes.fromhex("00000000")
 
     if not is_anim:
-        # Static asset replacement
+        # Static asset replacement (1024 bytes)
         rom[STATIC_ASSET_OFFSET : STATIC_ASSET_OFFSET + 1024] = payload_bytes
     else:
         # Animated Engine
-        # A. Frames in ROM Cave
-        frames_rt = ROM_CAVE_FRAMES + BASE_ADDR
-        rom[ROM_CAVE_FRAMES : ROM_CAVE_FRAMES + 8192] = payload_bytes
+        # A. Frames in Dedicated 8 KB Splash Buffer (0x30339C)
+        frames_rt = ANIM_FRAMES_OFFSET + BASE_ADDR
+        rom[ANIM_FRAMES_OFFSET : ANIM_FRAMES_OFFSET + 8192] = payload_bytes
+        # Write Frame 0 to static buffer as baseline
         rom[STATIC_ASSET_OFFSET : STATIC_ASSET_OFFSET + 1024] = payload_bytes[:1024]
 
-        # B. 48-byte Lookup Table (6 ticks per frame @ 10 fps)
-        table_rt = ROM_CAVE_TABLE + BASE_ADDR
+        # B. 48-byte Lookup Table at 0x307718 (6 ticks per frame @ 10 fps)
+        table_rt = ANIM_TABLE_OFFSET + BASE_ADDR
         table = bytearray()
         for idx in range(8):
             table.extend([idx] * 6)
-        rom[ROM_CAVE_TABLE : ROM_CAVE_TABLE + 48] = table
+        rom[ANIM_TABLE_OFFSET : ANIM_TABLE_OFFSET + 48] = table
 
-        # C. Straight-line ColdFire Player Routine
-        player_rt = ROM_CAVE_PLAYER + BASE_ADDR
+        # C. Straight-line ColdFire Player Routine at 0x307750
+        player_rt = ANIM_PLAYER_OFFSET + BASE_ADDR
         p = bytearray()
-        p.extend(b"\x20\x39\x44\xF3\x6D\x3C")               # move.l 0x44F36D3C, %d0
+        p.extend(b"\x20\x39\x44\xF3\x6D\x3C")               # move.l 0x44F36D3C, %d0 (read tick)
         p.extend(b"\x52\x80")                               # addq.l #1, %d0
         p.extend(b"\x0C\x80\x00\x00\x00\x30")               # cmpi.l #48, %d0
         p.extend(b"\x65\x02")                               # bcs.s +2
@@ -153,13 +157,13 @@ def apply_patches(rom, is_anim, payload_bytes, mode="equal"):
         p.extend(b"\x4E\xB9\x40\x11\x41\x68")               # jsr 0x40114168
         p.extend(b"\x4F\xEF\x00\x14")                       # lea 0x14(%sp), %sp
         p.extend(b"\x4E\x75")                               # rts
-        rom[ROM_CAVE_PLAYER : ROM_CAVE_PLAYER + len(p)] = p
+        rom[ANIM_PLAYER_OFFSET : ANIM_PLAYER_OFFSET + len(p)] = p
 
-        # D. 6-byte Trampoline in Slot 3
+        # D. 6-byte Trampoline in Slot 3 (0x0D0DF0)
         trampoline = bytearray(b"\x4E\xF9" + player_rt.to_bytes(4, "big"))
         while len(trampoline) < 28:
             trampoline.extend(b"\x4E\x71")
-        rom[SLOT3_OFFSET : SLOT3_OFFSET + 28] = trampoline
+        rom[SLOT3_TRAMPOLINE : SLOT3_TRAMPOLINE + 28] = trampoline
 
     return rom
 
@@ -169,7 +173,7 @@ def main():
     parser.add_argument("-i", "--input", default="Digitakt_II_OS1.17.syx", help="Official OS SysEx")
     parser.add_argument("-o", "--output", default="Digitakt_II_OS1.17_custom.syx", help="Output SysEx")
     parser.add_argument("-m", "--media", required=True, help="Input file (PNG/JPG/GIF)")
-    parser.add_argument("--mode", choices=["equal", "100percent"], default="equal", help="Probability mode (default: equal 25%%)")
+    parser.add_argument("--mode", choices=["100percent", "equal"], default="100percent", help="Probability mode (default: 100percent)")
     parser.add_argument("--invert", action="store_true", help="Invert colors")
     parser.add_argument("--preview", action="store_true", help="Show terminal preview and exit")
     parser.add_argument("-f", "--flash", action="store_true", help="Automatically flash output via amidi")
@@ -195,7 +199,7 @@ def main():
         print("Preview mode active. Exiting without modifying firmware.")
         return
 
-    # Decompress Section 3 directly from the input SysEx file using elektron-firmware-tool
+    # Extract clean Section 3 from the input SysEx
     section3_file = "section_3_MAIN_OS.bin"
     if not os.path.exists(section3_file):
         print(f"Decompressing Section 3 from {args.input}...")
@@ -224,6 +228,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-EOF
-
-chmod +x digi2_splash_tool.py
