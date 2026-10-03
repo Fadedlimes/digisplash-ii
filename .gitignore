@@ -1,0 +1,15 @@
+*.syx
+*.bin
+*.apl
+temp_*
+__pycache__/
+*.py[cod]
+badge_graphic_*.png
+boot_asset_*.png
+found_graphic_*.png
+test_badge_preview.png
+anim_frame_*.png
+check_frame0.png
+layout_*.png
+slot3_buffer*.png
+egg_*.png
