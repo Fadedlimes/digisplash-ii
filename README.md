@@ -1,5 +1,4 @@
 # DigiSplash-II
-Custom Boot Splash & Animation Tool for Elektron Digitakt II (OS 1.17)
 
 <img width="1303" height="903" alt="image" src="https://github.com/user-attachments/assets/2828ab11-675f-446f-b8ed-6fede233f186" />
 
