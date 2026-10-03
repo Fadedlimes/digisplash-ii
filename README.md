@@ -1,6 +1,8 @@
 # DigiSplash-II ⚡
 Custom Boot Splash & Animation Tool for Elektron Digitakt II (OS 1.17)
 
+<img width="1303" height="903" alt="image" src="https://github.com/user-attachments/assets/2828ab11-675f-446f-b8ed-6fede233f186" />
+
 DigiSplash-II is a standalone utility that allows you to inject custom static logos or full-motion animated boot sequences into the Elektron Digitakt II firmware.
 
 It takes any standard image (PNG, JPG, BMP) or animated GIF, encodes it into the Digitakt II native SSD1306 OLED hardware format, and compiles a flashable .syx firmware update.
